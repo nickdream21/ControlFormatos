@@ -9,6 +9,7 @@ import { GestionEmpresasFormatos } from './components/GestionEmpresasFormatos';
 import { Sidebar } from './components/Sidebar';
 import { Pedido, Formato, DashboardMetrics } from './types';
 import { storageService } from './services/storage';
+import initializeDatabase from './database/init';
 
 function App() {
   const [pedidos, setPedidos] = useState<Pedido[]>([]);
@@ -29,6 +30,9 @@ function App() {
   const loadData = async () => {
     setLoading(true);
     try {
+      // Inicializar base de datos primero
+      await initializeDatabase();
+      
       const [pedidosData, formatosData] = await Promise.all([
         storageService.getPedidos(),
         storageService.getFormatos(),

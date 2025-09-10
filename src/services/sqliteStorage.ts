@@ -8,7 +8,7 @@ class SQLiteStorageService {
   // ========== PEDIDOS ==========
   async getPedidos(): Promise<Pedido[]> {
     try {
-      return pedidoRepository.findAll();
+      return await pedidoRepository.findAll();
     } catch (error) {
       console.error('Error getting pedidos:', error);
       return [];
@@ -24,7 +24,7 @@ class SQLiteStorageService {
   async createPedido(pedidoData: Omit<Pedido, 'id' | 'created_at' | 'updated_at'>): Promise<Pedido> {
     try {
       // Crear el pedido
-      const nuevoPedido = pedidoRepository.create({
+      const nuevoPedido = await pedidoRepository.create({
         fecha: pedidoData.fecha,
         formato: pedidoData.formato,
         empresa: pedidoData.empresa,

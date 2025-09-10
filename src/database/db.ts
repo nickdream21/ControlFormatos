@@ -1,4 +1,8 @@
 import { getNodeModules, isNodeModulesAvailable } from './nodeModules';
+import BrowserDatabaseManager from './browserDb';
+
+// Detectar si estamos en un navegador
+const isBrowser = typeof window !== 'undefined' && !window.require;
 
 // Determinar la ruta de la base de datos
 const getDbPath = (): string => {
@@ -15,55 +19,85 @@ const getDbPath = (): string => {
 class DatabaseManager {
   private static instance: DatabaseManager;
   private db: any = null;
+  private browserDb: BrowserDatabaseManager | null = null;
+  private isInitialized: boolean = false;
 
   private constructor() {
-    const modules = getNodeModules();
-    
-    if (!modules) {
-      throw new Error('SQLite not available in browser environment');
-    }
-
-    const { Database, path, fs } = modules;
-    const dbPath = getDbPath();
-    
-    // Crear directorio si no existe
-    const dbDir = path.dirname(dbPath);
-    if (!fs.existsSync(dbDir)) {
-      fs.mkdirSync(dbDir, { recursive: true });
-    }
-
-    // Conectar a la base de datos
-    this.db = new Database(dbPath);
-    
-    // Configurar la base de datos
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('foreign_keys = ON');
-    
-    // Ejecutar migraciones
-    this.runMigrations();
+    // No inicializar aquí, sino en el método async initialize()
   }
 
   public static getInstance(): DatabaseManager {
     if (!DatabaseManager.instance) {
-      try {
-        DatabaseManager.instance = new DatabaseManager();
-      } catch (error) {
-        console.error('Failed to initialize database:', error);
-        throw error;
-      }
+      DatabaseManager.instance = new DatabaseManager();
     }
     return DatabaseManager.instance;
   }
 
-  public getDatabase(): any {
-    if (!this.db) {
-      throw new Error('Database not initialized');
+  public async initialize(): Promise<void> {
+    if (this.isInitialized) {
+      return;
     }
-    return this.db;
+
+    try {
+      if (isBrowser) {
+        // Usar IndexedDB para navegador
+        this.browserDb = BrowserDatabaseManager.getInstance();
+        await this.browserDb.initialize();
+      } else {
+        // Usar SQLite para Electron
+        const modules = getNodeModules();
+        
+        if (!modules) {
+          throw new Error('SQLite not available in browser environment');
+        }
+
+        const { Database, path, fs } = modules;
+        const dbPath = getDbPath();
+        
+        // Crear directorio si no existe
+        const dbDir = path.dirname(dbPath);
+        if (!fs.existsSync(dbDir)) {
+          fs.mkdirSync(dbDir, { recursive: true });
+        }
+
+        // Conectar a la base de datos
+        this.db = new Database(dbPath);
+        
+        // Configurar la base de datos
+        this.db.pragma('journal_mode = WAL');
+        this.db.pragma('foreign_keys = ON');
+        
+        // Ejecutar migraciones
+        this.runMigrations();
+      }
+      
+      this.isInitialized = true;
+    } catch (error) {
+      console.error('Failed to initialize database:', error);
+      throw error;
+    }
+  }
+
+  public getDatabase(): any {
+    if (isBrowser) {
+      if (!this.browserDb) {
+        throw new Error('Browser database not initialized. Call initialize() first.');
+      }
+      return this.browserDb;
+    } else {
+      if (!this.db) {
+        throw new Error('SQLite database not initialized. Call initialize() first.');
+      }
+      return this.db;
+    }
   }
 
   public static isAvailable(): boolean {
-    return isNodeModulesAvailable();
+    return isBrowser || isNodeModulesAvailable();
+  }
+
+  public static isBrowserMode(): boolean {
+    return isBrowser;
   }
 
   private runMigrations(): void {
@@ -184,9 +218,14 @@ class DatabaseManager {
   }
 
   public close(): void {
-    if (this.db) {
+    if (isBrowser && this.browserDb) {
+      this.browserDb.close();
+      this.browserDb = null;
+    } else if (this.db) {
       this.db.close();
+      this.db = null;
     }
+    this.isInitialized = false;
   }
 }
 

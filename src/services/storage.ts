@@ -1,6 +1,5 @@
 import { Pedido, Formato, Empresa, TipoFormato } from '../types';
-import { sqliteStorageService } from './sqliteStorage';
-import { migrationService } from './migrationService';
+import pedidoRepository from '../database/repositories/pedidoRepository';
 
 declare global {
   interface Window {
@@ -17,45 +16,6 @@ class StorageService {
   private readonly FORMATOS_FILE = 'formatos.json';
   private readonly EMPRESAS_FILE = 'empresas.json';
   private readonly TIPOS_FORMATO_FILE = 'tipos_formato.json';
-  private useSQLite = true; // Flag para controlar si usar SQLite o JSON
-  private migrationCompleted = false;
-
-  // Inicializar el servicio y realizar migración si es necesario
-  private async initialize(): Promise<void> {
-    if (this.migrationCompleted) return;
-
-    try {
-      // Verificar si SQLite está disponible
-      const DatabaseManager = await import('../database/db');
-      if (!DatabaseManager.default.isAvailable()) {
-        console.log('SQLite not available, using JSON storage');
-        this.useSQLite = false;
-        this.migrationCompleted = true;
-        return;
-      }
-
-      if (this.useSQLite) {
-        console.log('Initializing SQLite storage...');
-        
-        // Intentar migrar datos existentes
-        const migrationSuccess = await migrationService.migrateFromJSONToSQLite();
-        
-        if (!migrationSuccess) {
-          console.warn('Migration failed, falling back to JSON storage');
-          this.useSQLite = false;
-        } else {
-          console.log('SQLite storage initialized successfully');
-        }
-      }
-      
-      this.migrationCompleted = true;
-    } catch (error) {
-      console.error('Error initializing storage:', error);
-      console.warn('Falling back to JSON storage');
-      this.useSQLite = false;
-      this.migrationCompleted = true;
-    }
-  }
 
   // Fallback functions for web mode (localStorage)
   private readFromLocalStorage(filename: string): any[] {
@@ -79,22 +39,12 @@ class StorageService {
   }
 
   async getPedidos(): Promise<Pedido[]> {
-    await this.initialize();
-    
     try {
-      if (this.useSQLite) {
-        return await sqliteStorageService.getPedidos();
-      }
-      
-      // Fallback a JSON/localStorage
-      if (window.electronAPI) {
-        return await window.electronAPI.readFile(this.PEDIDOS_FILE);
-      } else {
-        return this.readFromLocalStorage(this.PEDIDOS_FILE);
-      }
+      return await pedidoRepository.findAll();
     } catch (error) {
       console.error('Error reading pedidos:', error);
-      return [];
+      // Fallback a localStorage para navegador
+      return this.readFromLocalStorage(this.PEDIDOS_FILE);
     }
   }
 
@@ -141,27 +91,24 @@ class StorageService {
   }
 
   async createPedido(pedidoData: Omit<Pedido, 'id' | 'created_at' | 'updated_at'>): Promise<Pedido> {
-    await this.initialize();
-    
     try {
-      if (this.useSQLite) {
-        return await sqliteStorageService.createPedido(pedidoData);
-      }
-      
-      // Fallback a JSON/localStorage
-      const pedidos = await this.getPedidos();
-      const now = new Date().toISOString();
-      
-      const newPedido: Pedido = {
-        ...pedidoData,
-        id: `pedido_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        created_at: now,
-        updated_at: now,
+      // Convertir el objeto para que coincida con el repositorio
+      const createData = {
+        fecha: pedidoData.fecha,
+        formato: pedidoData.formato,
+        empresa: pedidoData.empresa,
+        cantidad: pedidoData.cantidad,
+        numeracion_inicial: pedidoData.numeracion_inicial,
+        estado: pedidoData.estado,
+        fecha_recojo: pedidoData.fecha_recojo,
+        fecha_pago: pedidoData.fecha_pago,
+        monto: pedidoData.monto,
+        pagado: pedidoData.pagado
       };
-
-      pedidos.push(newPedido);
-      await this.savePedidos(pedidos);
-
+      
+      const newPedido = await pedidoRepository.create(createData);
+      
+      // Crear formatos para el pedido
       await this.createFormatosForPedido(newPedido);
       
       return newPedido;
@@ -172,34 +119,21 @@ class StorageService {
   }
 
   async updatePedido(id: string, updates: Partial<Pedido>): Promise<Pedido | null> {
-    const pedidos = await this.getPedidos();
-    const index = pedidos.findIndex(p => p.id === id);
-    
-    if (index === -1) return null;
-    
-    pedidos[index] = {
-      ...pedidos[index],
-      ...updates,
-      updated_at: new Date().toISOString(),
-    };
-    
-    await this.savePedidos(pedidos);
-    return pedidos[index];
+    try {
+      return await pedidoRepository.update(id, updates);
+    } catch (error) {
+      console.error('Error updating pedido:', error);
+      return null;
+    }
   }
 
   async deletePedido(id: string): Promise<boolean> {
-    const pedidos = await this.getPedidos();
-    const filteredPedidos = pedidos.filter(p => p.id !== id);
-    
-    if (filteredPedidos.length === pedidos.length) return false;
-    
-    const formatos = await this.getFormatos();
-    const filteredFormatos = formatos.filter(f => f.pedido_id !== id);
-    
-    await this.savePedidos(filteredPedidos);
-    await this.saveFormatos(filteredFormatos);
-    
-    return true;
+    try {
+      return await pedidoRepository.delete(id);
+    } catch (error) {
+      console.error('Error deleting pedido:', error);
+      return false;
+    }
   }
 
   private async createFormatosForPedido(pedido: Pedido): Promise<void> {
@@ -253,55 +187,20 @@ class StorageService {
 
   async getNextNumeracion(tipoFormato: string, empresa: string, blockSize: number = 50): Promise<number> {
     try {
-      if (window.electronAPI) {
-        return await window.electronAPI.getNextNumber(tipoFormato, empresa, blockSize);
-      } else {
-        // Fallback to calculating next number from existing formatos of the same type and empresa
-        const formatos = await this.getFormatos();
-        const pedidos = await this.getPedidos();
-        
-        // Filter formatos by the same formato type AND empresa
-        const formatosDelMismoTipoYEmpresa = formatos.filter(formato => {
-          const pedido = pedidos.find(p => p.id === formato.pedido_id);
-          return pedido && pedido.formato === tipoFormato && pedido.empresa === empresa;
-        });
-        
-        if (formatosDelMismoTipoYEmpresa.length === 0) {
-          return 1; // First formato of this type for this empresa
-        }
-        
-        const maxNumeracion = formatosDelMismoTipoYEmpresa.reduce((max, f) => Math.max(max, f.numeracion), 0);
-        return maxNumeracion + 1;
-      }
+      return await pedidoRepository.getNextNumeracion(tipoFormato, empresa);
     } catch (error) {
       console.error('Error getting next numeracion:', error);
-      // Fallback calculation
-      const formatos = await this.getFormatos();
-      const pedidos = await this.getPedidos();
-      
-      const formatosDelMismoTipoYEmpresa = formatos.filter(formato => {
-        const pedido = pedidos.find(p => p.id === formato.pedido_id);
-        return pedido && pedido.formato === tipoFormato && pedido.empresa === empresa;
-      });
-      
-      if (formatosDelMismoTipoYEmpresa.length === 0) {
-        return 1;
-      }
-      
-      const maxNumeracion = formatosDelMismoTipoYEmpresa.reduce((max, f) => Math.max(max, f.numeracion), 0);
-      return maxNumeracion + 1;
+      return 1;
     }
   }
 
   async searchPedidos(query: string): Promise<Pedido[]> {
-    const pedidos = await this.getPedidos();
-    const lowercaseQuery = query.toLowerCase();
-    
-    return pedidos.filter(pedido => 
-      pedido.empresa.toLowerCase().includes(lowercaseQuery) ||
-      pedido.formato.toLowerCase().includes(lowercaseQuery) ||
-      pedido.estado.toLowerCase().includes(lowercaseQuery)
-    );
+    try {
+      return await pedidoRepository.search(query);
+    } catch (error) {
+      console.error('Error searching pedidos:', error);
+      return [];
+    }
   }
 
   async filterPedidos(filters: {
@@ -310,27 +209,12 @@ class StorageService {
     fecha_desde?: string;
     fecha_hasta?: string;
   }): Promise<Pedido[]> {
-    const pedidos = await this.getPedidos();
-    
-    return pedidos.filter(pedido => {
-      if (filters.empresa && !pedido.empresa.toLowerCase().includes(filters.empresa.toLowerCase())) {
-        return false;
-      }
-      
-      if (filters.estado && pedido.estado !== filters.estado) {
-        return false;
-      }
-      
-      if (filters.fecha_desde && pedido.fecha < filters.fecha_desde) {
-        return false;
-      }
-      
-      if (filters.fecha_hasta && pedido.fecha > filters.fecha_hasta) {
-        return false;
-      }
-      
-      return true;
-    });
+    try {
+      return await pedidoRepository.filter(filters);
+    } catch (error) {
+      console.error('Error filtering pedidos:', error);
+      return [];
+    }
   }
 
   // Empresas methods
