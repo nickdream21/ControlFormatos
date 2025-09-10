@@ -13,6 +13,7 @@ const createWindow = () => {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    title: 'Control de Formatos SGV',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
