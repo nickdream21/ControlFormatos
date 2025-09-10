@@ -22,7 +22,7 @@ const createWindow = () => {
     show: true
   });
 
-  // Always use dev server when in development
+  // Always use dev server for now
   const startUrl = 'http://localhost:3001';
   
   console.log('Loading URL:', startUrl);
