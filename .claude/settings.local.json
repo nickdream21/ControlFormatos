@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install)",
+      "Bash(npm audit:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run start:*)",
+      "Bash(timeout:*)",
+      "Bash(npm start)",
+      "Bash(npm run build:*)",
+      "Bash(set PORT=3001)",
+      "Bash(cross-env:*)",
+      "Bash(taskkill:*)",
+      "Bash(npm run electron:*)",
+      "Bash(set ELECTRON_IS_DEV=true)",
+      "Bash(cmd /c:*)",
+      "Bash(set PORT=3002)",
+      "Bash(curl:*)",
+      "Bash(grep:*)",
+      "Bash(dir:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
